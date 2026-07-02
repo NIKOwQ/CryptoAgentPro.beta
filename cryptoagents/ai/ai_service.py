@@ -40,7 +40,7 @@ def run_sensing(symbol: str, triggered_by: str = "schedule", position: dict | No
 
     # 可选自动交易 (仅当 AUTO_TRADE 且调度器已切换/确认)
     auto_traded = False
-    if settings.AUTO_TRADE and action == "switched":
+    if settings.AUTO_TRADE and action == "switched" and triggered_by != "autopilot":
         try:
             from cryptoagents.execution.executor import ExecutionEngine
             sid = switch.get("to", scheduler.get_current_strategy(symbol))
@@ -64,6 +64,8 @@ def run_sensing(symbol: str, triggered_by: str = "schedule", position: dict | No
         "risk_level": trend["risk_level"],
         "reasoning": trend["reasoning"],
         "key_levels": trend.get("key_levels", {}),
+        "position_action": trend.get("position_action", "NONE"),
+        "position_reason": trend.get("position_reason", ""),
         "action": action,
         "auto_traded": auto_traded,
         "triggered_by": triggered_by,

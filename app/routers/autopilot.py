@@ -41,6 +41,48 @@ _LOOP_INTERVAL = settings.AUTOPILOT_INTERVAL
 _open_positions: dict[str, bool] = {}  # 内存级持仓跟踪: {symbol: True}
 _order_lock: dict[str, float] = {}  # 下单互斥锁: {symbol: timestamp}, 同一币种30秒内禁止重复下单
 
+# 原自动驾驶按15秒循环设计，运行间隔改大后仍按真实时间执行保护逻辑。
+_POSITION_AGE_UNIT_SECONDS = 15
+_REVERSAL_CONFIRM_SECONDS = 120
+_SLOW_BLEED_SECONDS = 300
+_AI_CLOSE_MIN_SECONDS = 45
+_REVERSAL_COOLDOWN_SECONDS = 15
+_PROTECTIVE_COOLDOWN_SECONDS = 75
+_AI_CLOSE_COOLDOWN_SECONDS = 45
+
+
+def _update_position_age(ss: dict, now: float | None = None) -> int:
+    now = now or time.time()
+    opened_at = ss.get("position_opened_at")
+    if not opened_at:
+        opened_at = now
+        ss["position_opened_at"] = opened_at
+    held_seconds = max(0, int(now - float(opened_at)))
+    ss["held_seconds"] = held_seconds
+    ss["held_cycles"] = held_seconds // _POSITION_AGE_UNIT_SECONDS
+    return held_seconds
+
+
+def _clear_position_age(ss: dict) -> None:
+    ss.pop("position_opened_at", None)
+    ss["held_seconds"] = 0
+    ss["held_cycles"] = 0
+
+
+def _set_cooldown(ss: dict, seconds: int) -> None:
+    ss["cooldown_until"] = time.time() + seconds
+    ss["cooldown_seconds"] = seconds
+    ss.pop("cooldown_cycles", None)
+
+
+def _cooldown_remaining(ss: dict) -> int:
+    until = float(ss.get("cooldown_until", 0) or 0)
+    remaining = max(0, int(until - time.time()))
+    if remaining <= 0:
+        ss.pop("cooldown_until", None)
+        ss.pop("cooldown_seconds", None)
+    return remaining
+
 
 def _check_api_ready() -> tuple[bool, str]:
     missing = []
@@ -159,6 +201,8 @@ def _autopilot_loop():
                         _open_positions[symbol] = False
                         pos_open = False
                 if pos_open:
+                    now_ts = time.time()
+                    held_seconds = _update_position_age(ss, now_ts)
                     # 变盘检测: 仅在STRONG趋势反转时触发，均值回归策略允许逆势
                     is_strong = ("STRONG" in ms.upper()) if ms else False
                     bullish = "BULL" in ms.upper() if ms else False
@@ -167,65 +211,72 @@ def _autopilot_loop():
                     # 只有强趋势 + 持仓方向相反 才触发变盘检测
                     trend_conflict = (bullish and not pos_long) or (bearish and pos_long)
                     if is_strong and trend_conflict:
-                        rc = ss.get("reversal_consensus", 0)
-                        rc += 1
-                        ss["reversal_consensus"] = rc
-                        if rc >= 8:  # 8周期=2分钟，给策略足够时间
-                            logger.info(f"[自动驾驶] {symbol} 强趋势变盘确认({rc}周期), 平仓")
+                        started = ss.get("reversal_started_at")
+                        if not started:
+                            started = now_ts
+                            ss["reversal_started_at"] = started
+                        elapsed_reversal = max(0, int(now_ts - float(started)))
+                        ss["reversal_elapsed_seconds"] = elapsed_reversal
+                        ss["reversal_consensus"] = max(1, elapsed_reversal // _POSITION_AGE_UNIT_SECONDS)
+                        if elapsed_reversal >= _REVERSAL_CONFIRM_SECONDS:
+                            logger.info(f"[自动驾驶] {symbol} 强趋势变盘确认({elapsed_reversal}秒), 平仓")
                             _close_position_immediate(symbol, mode)
                             _open_positions[symbol] = False
                             ss["reversal_consensus"] = 0
-                            ss["cooldown_cycles"] = 1
+                            ss.pop("reversal_started_at", None)
+                            ss.pop("reversal_elapsed_seconds", None)
+                            _clear_position_age(ss)
+                            _set_cooldown(ss, _REVERSAL_COOLDOWN_SECONDS)
                             pos_open = False
                             ss["last_action"] = f"变盘平仓 {symbol}"
                             _state["last_action"] = f"{symbol}: 变盘平仓 ({ms})"
                             _state["last_action_time"] = int(time.time())
                     else:
                         ss["reversal_consensus"] = 0
+                        ss.pop("reversal_started_at", None)
+                        ss.pop("reversal_elapsed_seconds", None)
                 ss["has_position"] = pos_open
 
                 # 3) AI动态持仓管理 + 多层保护
                 if pos_open:
-                    held_cycles = ss.get("held_cycles", 0)
-                    if held_cycles >= 1:
-                        _check_positions(symbol, mode)
-                        pnl = _get_position_pnl(symbol, mode)
-                        # 第一层: 慢流血保护 — 持仓>5分钟且浮亏>1.5%，不管AI怎么说都平
-                        if held_cycles >= 20 and pnl is not None and pnl < -1.5:
-                            logger.info(f"[自动驾驶] {symbol} 慢流血保护: 持仓{held_cycles}周期 浮亏{pnl:.1f}%")
+                    held_seconds = _update_position_age(ss)
+                    _check_positions(symbol, mode)
+                    pnl = _get_position_pnl(symbol, mode)
+                    # 第一层: 慢流血保护 — 持仓>5分钟且浮亏>1.5%，不管AI怎么说都平
+                    if held_seconds >= _SLOW_BLEED_SECONDS and pnl is not None and pnl < -1.5:
+                        logger.info(f"[自动驾驶] {symbol} 慢流血保护: 持仓{held_seconds}秒 浮亏{pnl:.1f}%")
+                        _close_position_immediate(symbol, mode)
+                        _open_positions[symbol] = False
+                        _clear_position_age(ss)
+                        _set_cooldown(ss, _PROTECTIVE_COOLDOWN_SECONDS)
+                        _state["last_action"] = f"{symbol}: 慢流血平仓 (浮亏{pnl:.1f}%)"
+                        _state["last_action_time"] = int(time.time())
+                        pos_open = False
+                    # 第二层: 极端保护 — 浮亏>6%立刻平仓
+                    if pos_open and pnl is not None and pnl < -6.0:
+                        logger.critical(f"[自动驾驶] {symbol} 极端浮亏保护: {pnl:.1f}%")
+                        _close_position_immediate(symbol, mode)
+                        _open_positions[symbol] = False
+                        _clear_position_age(ss)
+                        _set_cooldown(ss, _PROTECTIVE_COOLDOWN_SECONDS)
+                        _state["last_action"] = f"{symbol}: 极端浮亏平仓 ({pnl:.1f}%)"
+                        _state["last_action_time"] = int(time.time())
+                        pos_open = False
+                    # 第三层: AI动态判断 — DeepSeek决定是否平仓
+                    if pos_open:
+                        ai_action = report.get("position_action", "NONE")
+                        ai_reason = report.get("position_reason", "")
+                        if ai_action == "CLOSE" and held_seconds >= _AI_CLOSE_MIN_SECONDS:
+                            logger.info(f"[自动驾驶] {symbol} AI建议平仓: {ai_reason}")
                             _close_position_immediate(symbol, mode)
                             _open_positions[symbol] = False
-                            ss["held_cycles"] = 0
-                            ss["cooldown_cycles"] = 5
-                            _state["last_action"] = f"{symbol}: 慢流血平仓 (浮亏{pnl:.1f}%)"
+                            _clear_position_age(ss)
+                            _set_cooldown(ss, _AI_CLOSE_COOLDOWN_SECONDS)
+                            _state["last_action"] = f"{symbol}: AI平仓 ({ai_reason})"
                             _state["last_action_time"] = int(time.time())
                             pos_open = False
-                        # 第二层: 极端保护 — 浮亏>6%立刻平仓
-                        if pos_open and pnl is not None and pnl < -6.0:
-                            logger.critical(f"[自动驾驶] {symbol} 极端浮亏保护: {pnl:.1f}%")
-                            _close_position_immediate(symbol, mode)
-                            _open_positions[symbol] = False
-                            ss["held_cycles"] = 0
-                            ss["cooldown_cycles"] = 5
-                            _state["last_action"] = f"{symbol}: 极端浮亏平仓 ({pnl:.1f}%)"
-                            _state["last_action_time"] = int(time.time())
-                            pos_open = False
-                        # 第三层: AI动态判断 — DeepSeek决定是否平仓
-                        if pos_open:
-                            ai_action = report.get("position_action", "NONE")
-                            ai_reason = report.get("position_reason", "")
-                            if ai_action == "CLOSE" and held_cycles >= 3:
-                                logger.info(f"[自动驾驶] {symbol} AI建议平仓: {ai_reason}")
-                                _close_position_immediate(symbol, mode)
-                                _open_positions[symbol] = False
-                                ss["held_cycles"] = 0
-                                ss["cooldown_cycles"] = 3
-                                _state["last_action"] = f"{symbol}: AI平仓 ({ai_reason})"
-                                _state["last_action_time"] = int(time.time())
-                                pos_open = False
 
-                    else:
-                        ss["held_cycles"] = held_cycles + 1
+                ss["has_position"] = pos_open
 
                 # 4) 计算信号 — 已有持仓则跳过开仓
                 ss["phase"] = "计算信号"
@@ -320,10 +371,9 @@ def _autopilot_loop():
                             if now_ts - last_entry < 30:
                                 ss["phase"] = "冷却中"
                                 continue
-                            cooldown = ss.get("cooldown_cycles", 0)
+                            cooldown = _cooldown_remaining(ss)
                             if cooldown > 0:
-                                ss["cooldown_cycles"] = cooldown - 1
-                                ss["phase"] = f"冷却中({cooldown})"
+                                ss["phase"] = f"冷却中({cooldown}秒)"
                                 continue
                             ss["phase"] = "下单中"
                             _open_positions[symbol] = True  # 预先标记, 防止重复
@@ -370,8 +420,12 @@ def _autopilot_loop():
                                     _safety_valve.total_trades += 1
                                 ss["last_trade"] = f"{sig['signal']} {used_lev}x @{result.details.get('entry',0):.2f}"
                                 ss["no_trade_cycles"] = 0
+                                ss["position_opened_at"] = time.time()
+                                ss["held_seconds"] = 0
                                 ss["held_cycles"] = 0
                                 ss["cooldown_cycles"] = 0
+                                ss.pop("cooldown_until", None)
+                                ss.pop("cooldown_seconds", None)
                                 ss["last_entry_time"] = time.time()
                             else:
                                 _open_positions[symbol] = False
@@ -449,9 +503,15 @@ def _build_position_context(symbol: str, mode: str, ss: dict) -> dict | None:
                 "direction": pos["direction"], "entry_price": pos["entry_price"],
                 "pnl_pct": pnl, "leverage": pos.get("leverage", 10),
                 "stop_loss": pos.get("stop_loss", 0), "take_profit": pos.get("take_profit", 0),
+                "held_seconds": ss.get("held_seconds", 0),
                 "held_cycles": ss.get("held_cycles", 0),
             }
-        return {"direction": "?", "entry_price": 0, "pnl_pct": pnl, "leverage": 10, "stop_loss": 0, "take_profit": 0, "held_cycles": 0}
+        return {
+            "direction": "?", "entry_price": 0, "pnl_pct": pnl,
+            "leverage": 10, "stop_loss": 0, "take_profit": 0,
+            "held_seconds": ss.get("held_seconds", 0),
+            "held_cycles": ss.get("held_cycles", 0),
+        }
     except Exception:
         return None
 

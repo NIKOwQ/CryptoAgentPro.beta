@@ -14,7 +14,7 @@ from cryptoagents.data.kline_converter import KlineConverter
 DEEPSEEK_SYSTEM_PROMPT = """你是加密货币技术分析师。根据F/S/L/H格式K线和技术指标判断市场状态。
 状态: STRONG_BULL, STRONG_BEAR, WEAK_BULL, WEAK_BEAR, RANGING, CRASH_BOUNCE, PUMP_REVERSAL, TREND_CHANGE
 策略: S1=强趋势 S2=震荡 S3=转折 S4=马丁 S5=刮头皮 S6=TD9
-输出严格JSON: {"market_state":"...","confidence":0.5,"recommended_strategy":"S1","reasoning":"...","risk_level":"MEDIUM","suggested_leverage":5,"key_levels":{"support":0,"resistance":0}}"""
+输出严格JSON: {"market_state":"...","confidence":0.5,"recommended_strategy":"S1","reasoning":"...","risk_level":"MEDIUM","suggested_leverage":5,"key_levels":{"support":0,"resistance":0},"position_action":"NONE","position_reason":""}"""
 
 _converter = KlineConverter()
 
@@ -50,10 +50,11 @@ def _build_prompt(symbol, df_15m, df_1h, indicators, position=None) -> str:
         k1h = "\n".join(k.to_standard_string() for k in _converter.convert_df_rows(df_1h, 10))
     pos_str = ""
     if position:
+        held_seconds = int(position.get("held_seconds", position.get("held_cycles", 0) * 15) or 0)
         pos_str = f"""
 持仓: {position.get('direction','')} 入场={position.get('entry_price',0):.4f} 浮盈={position.get('pnl_pct',0):.2f}%
 杠杆: {position.get('leverage',10)}x 止损={position.get('stop_loss',0):.4f} 止盈={position.get('take_profit',0):.4f}
-已持~{position.get('held_cycles',0)*15}秒。应持有(HOLD)还是平仓(CLOSE)？理由<15字。
+已持~{held_seconds}秒。position_action填 HOLD 或 CLOSE，position_reason理由<15字。
 """
     return f"""当前: {datetime.now(timezone.utc).isoformat()}
 币种: {symbol}
