@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     BACKTEST_SPEED_OPTIONS: list[int] = Field(default_factory=lambda: [1, 2, 5, 10, 20, 100])
 
     # --- Autopilot ---
-    AUTOPILOT_INTERVAL: int = 15  # 自动驾驶循环间隔 (秒)
+    AUTOPILOT_INTERVAL: int = 300  # 自动驾驶循环间隔 (秒)
     AUTOPILOT_AI_TIMEOUT: float = 10.0  # AI 感知超时 (秒)
     AUTOPILOT_MAX_CONSECUTIVE_LOSSES: int = 5  # 连续亏损熔断阈值
     AUTOPILOT_MAX_DRAWDOWN_PCT: float = 8.0  # 权益回撤熔断阈值 (%)

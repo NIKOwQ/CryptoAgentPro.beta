@@ -18,6 +18,7 @@ const mode = ref("paper");
 const apiError = ref("");
 const symbolStatus = ref<Record<string, any>>({});
 const selectedSymbols = ref<string[]>(["BTC/USDT"]);
+const intervalSeconds = ref(15);
 let pollTimer: any = null;
 let uptimeTimer: any = null;
 
@@ -28,10 +29,12 @@ async function refresh() {
     startedAt.value = s.started_at;
     loopCount.value = s.loop_count;
     lastAction.value = s.last_action;
+    uptime.value = s.uptime ?? (s.running && s.started_at ? Math.max(0, Math.floor(Date.now() / 1000) - s.started_at) : 0);
     positions.value = s.positions || [];
     mode.value = s.mode || "paper";
     symbolStatus.value = s.symbol_status || {};
     selectedSymbols.value = s.selected_symbols || store.symbols;
+    intervalSeconds.value = s.interval_seconds || 15;
   } catch {}
   try { account.value = await api.autopilotAccount(); } catch {}
 }
@@ -89,7 +92,10 @@ onMounted(() => {
   refresh();
   loadHistory();
   pollTimer = setInterval(() => { refresh(); if (running.value) loadHistory(); }, 5000);
-  uptimeTimer = setInterval(() => { if (running.value) uptime.value++; }, 1000);
+  uptimeTimer = setInterval(() => {
+    if (!running.value) return;
+    uptime.value = startedAt.value ? Math.max(0, Math.floor(Date.now() / 1000) - startedAt.value) : uptime.value + 1;
+  }, 1000);
 });
 onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
 </script>
@@ -143,7 +149,7 @@ onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
       </span>
       <span v-if="running" class="text-white/50">运行: {{ fmtDur(uptime) }}</span>
       <span v-if="running" class="text-white/50">循环: {{ loopCount }}</span>
-      <span v-if="running" class="text-white/50">间隔: 15秒</span>
+      <span v-if="running" class="text-white/50">间隔: {{ fmtDur(intervalSeconds) }}</span>
     </div>
 
     <!-- API 未接入提示 -->

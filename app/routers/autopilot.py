@@ -1,6 +1,6 @@
 """自动驾驶模块 — AI全权接管策略切换与下单。
 
-启动后: 后台循环每15秒感知 → 自动切换策略 → 自动下单
+启动后: 后台循环按 AUTOPILOT_INTERVAL 感知 → 自动切换策略 → 自动下单
 停止后: 平掉所有仓位 → 恢复手动模式
 
 支持 paper/testnet 两种模式。
@@ -37,7 +37,7 @@ _state: dict[str, Any] = {
 }
 _thread: threading.Thread | None = None
 _stop_event = threading.Event()
-_LOOP_INTERVAL = 15
+_LOOP_INTERVAL = settings.AUTOPILOT_INTERVAL
 _open_positions: dict[str, bool] = {}  # 内存级持仓跟踪: {symbol: True}
 _order_lock: dict[str, float] = {}  # 下单互斥锁: {symbol: timestamp}, 同一币种30秒内禁止重复下单
 
@@ -829,4 +829,5 @@ def _get_state() -> dict[str, Any]:
         "mode": _state.get("mode", "paper"),
         "symbol_status": _state.get("symbol_status", {}),
         "selected_symbols": _state.get("selected_symbols", settings.SYMBOLS_WATCHLIST),
+        "interval_seconds": _LOOP_INTERVAL,
     }
