@@ -439,7 +439,7 @@ def _autopilot_loop():
                         else:
                             nt += 1
                         ss["no_trade_cycles"] = nt
-                        if ss.get("phase") != "下单中":
+                        if ss.get("phase") not in ("下单中", "持有中") and not str(ss.get("phase", "")).startswith("下单失败"):
                             ss["phase"] = "就绪"
                     else:
                         ss["signal"] = "HOLD"
