@@ -209,9 +209,13 @@ class ExecutionEngine:
             return ExecutionResult(True, message=f"[模拟] 平仓{r['closed']}个", details=r)
         try:
             ex = self._exchange()
+            if hasattr(ex, 'cancel_all_open_orders'):
+                ex.cancel_all_open_orders(symbol)
             if hasattr(ex, 'close_position_market'):
                 # Use OKX dedicated close-position endpoint
                 result = ex.close_position_market(symbol)
+                if hasattr(ex, 'cancel_all_open_orders'):
+                    ex.cancel_all_open_orders(symbol)
                 return ExecutionResult(True, message=result.get("message", "平仓已提交"), details=result)
             else:
                 # Fallback: reduce_only market orders
@@ -222,6 +226,8 @@ class ExecutionEngine:
                         side = "sell" if pos["direction"] == "LONG" else "buy"
                         ex.place_market_order(symbol, side, pos["contracts"], reduce_only=True)
                         closed += 1
+                if hasattr(ex, 'cancel_all_open_orders'):
+                    ex.cancel_all_open_orders(symbol)
                 return ExecutionResult(True, message=f"平仓{closed}个", details={"closed": closed})
         except Exception as exc:
             return ExecutionResult(False, message=str(exc))

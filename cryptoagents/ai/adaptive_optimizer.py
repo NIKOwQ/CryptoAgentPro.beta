@@ -135,8 +135,8 @@ def _call_ai_for_params(sid: str, name: str, current_params: dict, metrics: dict
 市场状态: {market_state} 置信度: {int(confidence*100)}%
 请分析是否需要调整参数。"""
         import httpx
-        with httpx.Client(timeout=20, verify=False) as c:
-            r = c.post("https://api.deepseek.com/v1/chat/completions",
+        with httpx.Client(timeout=90, verify=False) as c:
+            r = c.post(settings.AI_BASE_URL.rstrip("/") + "/chat/completions",
                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                        json={"model": settings.AI_MODEL, "messages": [
                            {"role": "system", "content": _OPTIMIZER_SYSTEM},

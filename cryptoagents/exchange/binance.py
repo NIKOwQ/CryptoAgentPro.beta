@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+from decimal import Decimal, ROUND_DOWN
 from typing import Any
 from urllib.parse import urlencode
 
@@ -59,6 +60,8 @@ class BinanceExchange(ExchangeBase):
             with httpx.Client(timeout=15, verify=ctx) as c:
                 if method == "GET":
                     r = c.get(url, headers=self._headers())
+                elif method == "DELETE":
+                    r = c.delete(url, headers=self._headers())
                 else:
                     r = c.post(url, headers=self._headers())
             if r.status_code != 200:
@@ -132,6 +135,54 @@ class BinanceExchange(ExchangeBase):
         self._request("POST", "/fapi/v1/leverage",
                       {"symbol": sym, "leverage": str(leverage)}, signed=True)
 
+    def _filters(self, symbol: str) -> dict[str, Decimal]:
+        sym = self._symbol_to_binance(symbol)
+        info = self._request("GET", "/fapi/v1/exchangeInfo", {"symbol": sym})
+        result = {"step": Decimal("0.001"), "tick": Decimal("0.01")}
+        if isinstance(info, dict):
+            for item in info.get("symbols", []):
+                if item.get("symbol") != sym:
+                    continue
+                for flt in item.get("filters", []):
+                    if flt.get("filterType") == "LOT_SIZE":
+                        result["step"] = Decimal(str(flt.get("stepSize", "0.001")))
+                    elif flt.get("filterType") == "PRICE_FILTER":
+                        result["tick"] = Decimal(str(flt.get("tickSize", "0.01")))
+        return result
+
+    def _format_quantity(self, symbol: str, qty: float) -> str:
+        step = self._filters(symbol)["step"]
+        q = Decimal(str(qty)).quantize(step, rounding=ROUND_DOWN)
+        if q <= 0:
+            q = step
+        return format(q.normalize(), "f")
+
+    def _format_price(self, symbol: str, price: float) -> str:
+        tick = self._filters(symbol)["tick"]
+        p = Decimal(str(price)).quantize(tick, rounding=ROUND_DOWN)
+        return format(p.normalize(), "f")
+
+    def cancel_all_open_orders(self, symbol: str) -> dict[str, Any]:
+        if not self.with_keys:
+            return {"status": "error", "message": "no API key"}
+        sym = self._symbol_to_binance(symbol)
+        normal = self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": sym}, signed=True)
+        algo = self._request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": sym}, signed=True)
+        errors = []
+        for item in (normal, algo):
+            if isinstance(item, dict) and "error" in item:
+                errors.append(str(item["error"])[:160])
+        if errors:
+            return {"status": "error", "message": " | ".join(errors)}
+        return {"status": "ok", "normal": normal, "algo": algo}
+
+    def fetch_open_algo_orders(self, symbol: str) -> list[dict[str, Any]]:
+        if not self.with_keys:
+            return []
+        sym = self._symbol_to_binance(symbol)
+        data = self._request("GET", "/fapi/v1/openAlgoOrders", {"symbol": sym}, signed=True)
+        return data if isinstance(data, list) else []
+
     def place_market_order(self, symbol: str, side: str, qty: float,
                            reduce_only: bool = False, sl_price: float = 0,
                            tp_price: float = 0, leverage: int = 0) -> dict[str, Any]:
@@ -139,29 +190,56 @@ class BinanceExchange(ExchangeBase):
             return {"id": "", "status": "error", "message": "no API key"}
         sym = self._symbol_to_binance(symbol)
         bn_side = "BUY" if side.lower() in ("buy", "long") else "SELL"
+        qty_str = self._format_quantity(symbol, qty)
         params: dict[str, Any] = {
             "symbol": sym, "side": bn_side, "type": "MARKET",
-            "quantity": str(qty),
+            "quantity": qty_str,
         }
         if reduce_only:
             params["reduceOnly"] = "true"
         data = self._request("POST", "/fapi/v1/order", params, signed=True)
-        if "orderId" in data:
-            # SL/TP: closePosition=true handles direction automatically
-            if sl_price:
-                self._request("POST", "/fapi/v1/order", {
-                    "symbol": sym, "side": "SELL" if bn_side == "BUY" else "BUY",
-                    "type": "STOP_MARKET", "stopPrice": str(sl_price),
-                    "closePosition": "true",
-                }, signed=True)
-            if tp_price:
-                self._request("POST", "/fapi/v1/order", {
-                    "symbol": sym, "side": "SELL" if bn_side == "BUY" else "BUY",
-                    "type": "TAKE_PROFIT_MARKET", "stopPrice": str(tp_price),
-                    "closePosition": "true",
-                }, signed=True)
+        if "orderId" not in data:
+            return {"id": "", "status": "error", "message": str(data.get("error", data))[:200]}
+
+        if reduce_only:
             return {"id": str(data["orderId"]), "status": "ok", "message": "order placed"}
-        return {"id": "", "status": "error", "message": str(data.get("error", data))[:200]}
+
+        protection_errors: list[str] = []
+        close_side = "SELL" if bn_side == "BUY" else "BUY"
+        if sl_price:
+            sl = self._request("POST", "/fapi/v1/algoOrder", {
+                "symbol": sym, "side": close_side,
+                "algoType": "CONDITIONAL",
+                "type": "STOP_MARKET",
+                "triggerPrice": self._format_price(symbol, sl_price),
+                "quantity": qty_str,
+                "reduceOnly": "true",
+                "workingType": "MARK_PRICE",
+            }, signed=True)
+            if "error" in sl:
+                protection_errors.append(str(sl["error"])[:180])
+        if tp_price:
+            tp = self._request("POST", "/fapi/v1/algoOrder", {
+                "symbol": sym, "side": close_side,
+                "algoType": "CONDITIONAL",
+                "type": "TAKE_PROFIT_MARKET",
+                "triggerPrice": self._format_price(symbol, tp_price),
+                "quantity": qty_str,
+                "reduceOnly": "true",
+                "workingType": "MARK_PRICE",
+            }, signed=True)
+            if "error" in tp:
+                protection_errors.append(str(tp["error"])[:180])
+        if protection_errors:
+            self.cancel_all_open_orders(symbol)
+            close = self._request("POST", "/fapi/v1/order", {
+                "symbol": sym, "side": close_side, "type": "MARKET",
+                "quantity": qty_str, "reduceOnly": "true",
+            }, signed=True)
+            close_msg = "closed" if "orderId" in close else str(close.get("error", close))[:120]
+            return {"id": str(data["orderId"]), "status": "error",
+                    "message": "protection order failed; entry " + close_msg + ": " + " | ".join(protection_errors)[:220]}
+        return {"id": str(data["orderId"]), "status": "ok", "message": "order placed"}
 
     def fetch_account_balance(self) -> dict[str, Any]:
         if not self.with_keys:

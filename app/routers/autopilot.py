@@ -52,15 +52,21 @@ def _check_api_ready() -> tuple[bool, str]:
         if not settings.EXCHANGE_API_KEY or not settings.EXCHANGE_SECRET:
             missing.append(f"交易所 API Key/Secret ({mode} 模式真实下单必需)")
 
-    # 检查交易所连通性
-    if mode != "paper":
+    # 自动驾驶真实执行走 cryptoagents.exchange，而不是公共行情探测器。
+    # 启动前检查同一条交易路径，避免 CCXT 公共探测超时导致误判 API 未接入。
+    if mode != "paper" and not any("交易所 API Key/Secret" in item for item in missing):
         try:
-            from cryptoagents.data.ccxt_fetcher import CCXTFetcher
-            working = CCXTFetcher.find_working_exchange()
-            if working != settings.EXCHANGE_NAME:
-                missing.insert(0, f"{settings.EXCHANGE_NAME} 不可达, 建议切换到 {working}")
-        except Exception:
-            missing.insert(0, "交易所网络超时, 请检查网络或切换到 paper 模式")
+            from cryptoagents.exchange import factory
+            ex = factory.get_exchange(with_keys=True)
+            ticker = ex.fetch_ticker("BTC/USDT")
+            balance = ex.fetch_account_balance()
+            if float(ticker.get("last", 0) or 0) <= 0:
+                missing.insert(0, f"{settings.EXCHANGE_NAME} 行情接口不可用")
+            if float(balance.get("total", 0) or 0) <= 0 and float(balance.get("available", 0) or 0) <= 0:
+                missing.insert(0, f"{settings.EXCHANGE_NAME} 账户余额接口不可用或余额为0")
+        except Exception as exc:
+            logger.warning(f"交易所启动前检查失败: {exc}")
+            missing.insert(0, "交易所 API 检查失败, 请确认测试网 Key 与交易模式")
 
     if missing:
         return False, "以下 API 未接入: " + "、".join(missing) + "。请到「设置」页配置后再启动。"
@@ -93,7 +99,7 @@ def _autopilot_loop():
     from cryptoagents.ai import ai_service
     from cryptoagents.execution.executor import ExecutionEngine
     from cryptoagents.data.ccxt_fetcher import CCXTFetcher
-    from cryptoagents.strategy.strategies import get_strategy
+    from cryptoagents.strategy.strategies import get_strategy, strategies
     from cryptoagents.strategy.scheduler import scheduler
 
     mode = settings.TRADING_MODE
@@ -536,10 +542,14 @@ def _check_positions(symbol: str, mode: str):
                 # 用测试网持仓的实际杠杆计算浮盈，-8%硬止损
                 if pnl_pct <= -8 or pnl_pct >= 20:
                     close_side = "sell" if side == "long" else "buy"
+                    if hasattr(ex, 'cancel_all_open_orders'):
+                        ex.cancel_all_open_orders(symbol)
                     if hasattr(ex, 'close_position_market'):
                         ex.close_position_market(symbol)
                     else:
                         ex.place_market_order(symbol, close_side, abs(contracts), reduce_only=True)
+                    if hasattr(ex, 'cancel_all_open_orders'):
+                        ex.cancel_all_open_orders(symbol)
                     _open_positions[symbol] = False
                     logger.info(f"[自动驾驶] {symbol} 测试网止损止盈平仓 (pnl={pnl_pct:.1f}%), _open_positions 已清除")
                     if _safety_valve:
@@ -690,6 +700,8 @@ def _close_all_positions() -> int:
             else:
                 from cryptoagents.execution.executor import ExecutionEngine
                 ex = ExecutionEngine()._exchange()
+                if hasattr(ex, "cancel_all_open_orders"):
+                    ex.cancel_all_open_orders(symbol)
                 positions = ex.fetch_positions([symbol])
                 for pos in positions:
                     contracts = float(pos.get("qty", 0) or 0)
@@ -698,6 +710,8 @@ def _close_all_positions() -> int:
                         side = "sell" if direction == "LONG" else "buy"
                         ex.place_market_order(symbol, side, abs(contracts), reduce_only=True)
                         closed += 1
+                if hasattr(ex, "cancel_all_open_orders"):
+                    ex.cancel_all_open_orders(symbol)
     except Exception as exc:
         logger.error(f"停止平仓异常: {exc}")
     return closed

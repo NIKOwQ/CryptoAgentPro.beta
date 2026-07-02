@@ -6,7 +6,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8400:8000"
+    env_file:
+      - .env
     environment:
       - MONGODB_HOST=mongodb
       - REDIS_HOST=redis
@@ -20,21 +22,17 @@ services:
       context: .
       dockerfile: docker/Dockerfile.frontend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3400:80"
     depends_on:
       - backend
 
   mongodb:
     image: mongo:4.4
-    ports:
-      - "27017:27017"
     volumes:
       - mongo_data:/data/db
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
 

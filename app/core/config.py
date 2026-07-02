@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # --- AI ---
     AI_PROVIDER: str = "deepseek"
     AI_MODEL: str = "deepseek-chat"
+    AI_BASE_URL: str = "https://api.deepseek.com/v1"
     DEEPSEEK_API_KEY: str = ""
     AI_MAX_TOKENS: int = 2000
     AI_TEMPERATURE: float = 0.1

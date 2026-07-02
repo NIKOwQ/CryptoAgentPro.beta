@@ -123,8 +123,8 @@ def chat(messages: list[dict[str, str]], symbol: str | None = None,
 
     try:
         import httpx
-        with httpx.Client(timeout=60, verify=False) as c:
-            r = c.post("https://api.deepseek.com/v1/chat/completions",
+        with httpx.Client(timeout=90, verify=False) as c:
+            r = c.post(settings.AI_BASE_URL.rstrip("/") + "/chat/completions",
                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                        json={"model": settings.AI_MODEL, "messages": api_messages,
                              "max_tokens": settings.AI_MAX_TOKENS, "temperature": settings.AI_TEMPERATURE})
