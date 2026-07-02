@@ -118,6 +118,7 @@ def get_account():
         ex = engine._exchange()
         bal = ex.fetch_account_balance()
         positions = ex.fetch_positions()
+        pnl = ex.fetch_realized_pnl_summary() if hasattr(ex, "fetch_realized_pnl_summary") else {}
         return {
             "trading_mode": settings.TRADING_MODE,
             "equity": bal.get("total", 0),
@@ -126,9 +127,11 @@ def get_account():
             "unrealized_pnl": bal.get("unrealized_pnl", 0),
             "initial_margin": bal.get("initial_margin", 0),
             "open_positions": len(positions),
-            "realized_pnl": 0,
-            "closed_trades": 0,
-            "win_rate": 0,
+            "realized_pnl": pnl.get("realized_pnl", 0),
+            "gross_realized_pnl": pnl.get("gross_realized_pnl", 0),
+            "fees": pnl.get("fees", 0),
+            "closed_trades": pnl.get("closed_trades", 0),
+            "win_rate": pnl.get("win_rate", 0),
         }
     except Exception:
         return paper_account.account_summary()
@@ -136,6 +139,18 @@ def get_account():
 
 @router.get("/history")
 def get_history(symbol: str = "", limit: int = 100):
+    if settings.TRADING_MODE != "paper":
+        try:
+            engine = ExecutionEngine()
+            ex = engine._exchange()
+            if hasattr(ex, "fetch_realized_pnl_history"):
+                trades = ex.fetch_realized_pnl_history(limit=limit)
+                if symbol:
+                    trades = [t for t in trades if t.get("symbol") == symbol]
+                return {"trades": trades}
+        except Exception:
+            return {"trades": []}
+
     from app.models.strategy import TradeLog
     from app.core.database import get_sqlite_session
     session = get_sqlite_session()

@@ -265,3 +265,78 @@ class BinanceExchange(ExchangeBase):
                         "wallet_balance": total,
                         "unrealized_pnl": 0}
         return {"total": 0, "available": 0, "wallet_balance": 0, "unrealized_pnl": 0}
+
+    def fetch_income_history(self, days: int = 7, limit: int = 1000) -> list[dict[str, Any]]:
+        """Fetch recent futures income rows used for net realized PnL reporting."""
+        if not self.with_keys:
+            return []
+        start = int((time.time() - days * 86400) * 1000)
+        data = self._request("GET", "/fapi/v1/income", {
+            "startTime": str(start),
+            "limit": str(min(max(limit, 1), 1000)),
+        }, signed=True)
+        if not isinstance(data, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for row in data:
+            sym = row.get("symbol", "")
+            if sym.endswith("USDT"):
+                symbol = f"{sym[:-4]}/USDT"
+            else:
+                symbol = sym
+            income_type = row.get("incomeType", "")
+            income = float(row.get("income", 0) or 0)
+            out.append({
+                "symbol": symbol,
+                "income_type": income_type,
+                "income": income,
+                "asset": row.get("asset", ""),
+                "time": int(row.get("time", 0) or 0),
+                "trade_id": str(row.get("tradeId", "") or row.get("tranId", "")),
+                "info": row.get("info", ""),
+            })
+        return out
+
+    def fetch_realized_pnl_summary(self, days: int = 7) -> dict[str, Any]:
+        rows = self.fetch_income_history(days=days, limit=1000)
+        realized_rows = [r for r in rows if r["income_type"] == "REALIZED_PNL" and r["income"] != 0]
+        fee_rows = [r for r in rows if r["income_type"] in ("COMMISSION", "FUNDING_FEE")]
+        realized = sum(r["income"] for r in realized_rows)
+        fees = sum(r["income"] for r in fee_rows)
+        wins = [r for r in realized_rows if r["income"] > 0]
+        losses = [r for r in realized_rows if r["income"] < 0]
+        return {
+            "realized_pnl": round(realized + fees, 8),
+            "gross_realized_pnl": round(realized, 8),
+            "fees": round(fees, 8),
+            "closed_trades": len(realized_rows),
+            "win_rate": round(len(wins) / len(realized_rows) * 100, 1) if realized_rows else 0.0,
+            "wins": len(wins),
+            "losses": len(losses),
+            "days": days,
+        }
+
+    def fetch_realized_pnl_history(self, days: int = 7, limit: int = 100) -> list[dict[str, Any]]:
+        rows = [r for r in self.fetch_income_history(days=days, limit=1000)
+                if r["income_type"] == "REALIZED_PNL" and r["income"] != 0]
+        rows.sort(key=lambda r: r["time"], reverse=True)
+        out = []
+        for idx, row in enumerate(rows[:limit]):
+            out.append({
+                "id": row["trade_id"] or idx,
+                "symbol": row["symbol"],
+                "direction": "",
+                "qty": 0,
+                "leverage": 0,
+                "entry_price": 0,
+                "exit_price": 0,
+                "stop_loss": 0,
+                "take_profit": 0,
+                "pnl": row["income"],
+                "pnl_pct": 0,
+                "strategy_id": "exchange",
+                "mode": "testnet" if self.testnet else "live",
+                "opened_at": 0,
+                "closed_at": row["time"] // 1000,
+            })
+        return out

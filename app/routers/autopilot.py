@@ -828,6 +828,16 @@ def _get_positions(mode: str) -> list[dict[str, Any]]:
 
 @router.get("/history")
 def history(limit: int = 50):
+    if settings.TRADING_MODE != "paper":
+        try:
+            from cryptoagents.exchange import factory
+            ex = factory.get_exchange(with_keys=True)
+            if hasattr(ex, "fetch_realized_pnl_history"):
+                return {"history": ex.fetch_realized_pnl_history(limit=limit)}
+        except Exception as exc:
+            logger.warning(f"交易所历史盈亏读取失败: {exc}")
+        return {"history": []}
+
     from app.models.strategy import PaperOrder
     from app.core.database import get_sqlite_session
     s = get_sqlite_session()
@@ -857,8 +867,7 @@ def account():
         ex = factory.get_exchange(with_keys=True)
         bal = ex.fetch_account_balance()
         positions = ex.fetch_positions()
-        from cryptoagents.execution import paper_account
-        paper = paper_account.account_summary()
+        pnl = ex.fetch_realized_pnl_summary() if hasattr(ex, "fetch_realized_pnl_summary") else {}
         return {
             "trading_mode": mode,
             "equity": bal.get("total", 0),
@@ -866,10 +875,12 @@ def account():
             "available": bal.get("available", 0),
             "unrealized_pnl": bal.get("unrealized_pnl", 0),
             "initial_margin": bal.get("initial_margin", 0),
-            "realized_pnl": paper.get("realized_pnl", 0),
+            "realized_pnl": pnl.get("realized_pnl", 0),
+            "gross_realized_pnl": pnl.get("gross_realized_pnl", 0),
+            "fees": pnl.get("fees", 0),
             "open_positions": len(positions),
-            "closed_trades": paper.get("closed_trades", 0),
-            "win_rate": paper.get("win_rate", 0),
+            "closed_trades": pnl.get("closed_trades", 0),
+            "win_rate": pnl.get("win_rate", 0),
         }
     except Exception:
         from cryptoagents.execution import paper_account
