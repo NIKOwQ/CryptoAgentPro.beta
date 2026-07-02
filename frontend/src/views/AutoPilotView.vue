@@ -87,6 +87,12 @@ function fmtDur(sec: number) {
   if (m) return `${m}分${s}秒`;
   return `${s}秒`;
 }
+function fmtMoney(value: any) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  const n = Number(value);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}$${n.toFixed(2)}`;
+}
 
 onMounted(() => {
   refresh();
@@ -200,24 +206,30 @@ onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
     </Card>
 
     <!-- 账户概览 -->
-    <div class="grid grid-cols-4 gap-3">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
         <div class="text-[10px] text-white/30">账户权益</div>
         <div class="text-lg font-semibold">${{ account?.equity?.toFixed(2) ?? '--' }}</div>
       </div>
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
-        <div class="text-[10px] text-white/30">{{ account?.trading_mode === 'testnet' ? '未实现盈亏' : '已实现盈亏' }}</div>
-        <div class="text-lg font-semibold" :class="((account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl) ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">
-          {{ ((account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl) ?? 0) >= 0 ? '+' : '' }}${{ (account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl)?.toFixed(2) ?? '--' }}
-        </div>
+        <div class="text-[10px] text-white/30">净已实现</div>
+        <div class="text-lg font-semibold" :class="(account?.realized_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">{{ fmtMoney(account?.realized_pnl) }}</div>
+      </div>
+      <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
+        <div class="text-[10px] text-white/30">未实现盈亏</div>
+        <div class="text-lg font-semibold" :class="(account?.unrealized_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">{{ fmtMoney(account?.unrealized_pnl) }}</div>
+      </div>
+      <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
+        <div class="text-[10px] text-white/30">费用</div>
+        <div class="text-lg font-semibold" :class="(account?.fees ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">{{ fmtMoney(account?.fees ?? 0) }}</div>
+      </div>
+      <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
+        <div class="text-[10px] text-white/30">胜率 / 已平</div>
+        <div class="text-lg font-semibold">{{ account?.win_rate ?? 0 }}% · {{ account?.closed_trades ?? 0 }}</div>
       </div>
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
         <div class="text-[10px] text-white/30">持仓数</div>
         <div class="text-lg font-semibold">{{ account?.open_positions ?? 0 }}</div>
-      </div>
-      <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
-        <div class="text-[10px] text-white/30">{{ account?.trading_mode === 'testnet' ? '可用余额' : '胜率' }}</div>
-        <div class="text-lg font-semibold">{{ account?.trading_mode === 'testnet' ? `$${account?.available?.toFixed(2) ?? '--'}` : `${account?.win_rate ?? 0}%` }}</div>
       </div>
     </div>
 
@@ -263,15 +275,15 @@ onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
         <tbody>
           <tr v-for="h in history" :key="h.id" class="border-b border-white/5">
             <td class="py-1.5 font-medium">{{ h.symbol }}</td>
-            <td :class="h.direction === 'LONG' ? 'text-green-400' : 'text-red-400'">{{ h.direction }}</td>
+            <td :class="h.direction === 'LONG' ? 'text-green-400' : h.direction === 'SHORT' ? 'text-red-400' : 'text-white/40'">{{ h.direction || 'EXCHANGE' }}</td>
             <td class="text-blue-400">{{ h.strategy_id }}</td>
-            <td>{{ h.entry_price?.toFixed(2) }}</td>
-            <td>{{ h.exit_price?.toFixed(2) }}</td>
+            <td>{{ h.entry_price ? h.entry_price.toFixed(2) : '--' }}</td>
+            <td>{{ h.exit_price ? h.exit_price.toFixed(2) : '--' }}</td>
             <td :class="(h.pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">
               {{ (h.pnl ?? 0) >= 0 ? '+' : '' }}${{ h.pnl?.toFixed(2) }}
             </td>
             <td :class="(h.pnl_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">
-              {{ h.pnl_pct }}%
+              {{ h.pnl_pct ? `${h.pnl_pct}%` : '--' }}
             </td>
             <td class="text-white/30">{{ fmtTime(h.opened_at) }}</td>
             <td class="text-white/30">{{ fmtTime(h.closed_at) }}</td>

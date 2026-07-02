@@ -49,6 +49,7 @@ _AI_CLOSE_MIN_SECONDS = 45
 _REVERSAL_COOLDOWN_SECONDS = 15
 _PROTECTIVE_COOLDOWN_SECONDS = 75
 _AI_CLOSE_COOLDOWN_SECONDS = 45
+_POSITION_GUARD_INTERVAL_SECONDS = 30
 
 
 def _update_position_age(ss: dict, now: float | None = None) -> int:
@@ -427,6 +428,8 @@ def _autopilot_loop():
                                 ss.pop("cooldown_until", None)
                                 ss.pop("cooldown_seconds", None)
                                 ss["last_entry_time"] = time.time()
+                                ss["has_position"] = True
+                                ss["phase"] = "持有中"
                             else:
                                 _open_positions[symbol] = False
                                 ss["signal_error"] = result.message
@@ -450,7 +453,12 @@ def _autopilot_loop():
 
         elapsed = time.time() - loop_start
         remaining = max(0.2, _LOOP_INTERVAL - elapsed)
-        _stop_event.wait(remaining)
+        wait_until = time.time() + remaining
+        while not _stop_event.is_set() and time.time() < wait_until:
+            wait_for = min(_POSITION_GUARD_INTERVAL_SECONDS, max(0.2, wait_until - time.time()))
+            _stop_event.wait(wait_for)
+            if not _stop_event.is_set():
+                _lightweight_position_guard(watchlist, mode)
     logger.info("自动驾驶停止")
 
 
@@ -566,6 +574,39 @@ def _close_position_immediate(symbol: str, mode: str):
         logger.error(f"[_close_position_immediate] {symbol} 平仓失败: {result.message}")
     _open_positions[symbol] = False
     logger.info(f"[_close_position_immediate] {symbol} 已平仓, _open_positions 已清除")
+
+
+def _lightweight_position_guard(watchlist: list[str], mode: str) -> None:
+    """No-LLM guard during long autopilot sleeps. It only manages existing risk."""
+    for symbol in watchlist:
+        if _stop_event.is_set():
+            break
+        ss = _state["symbol_status"].setdefault(symbol, {})
+        try:
+            pos_open = _has_open_position(symbol, mode)
+            _open_positions[symbol] = pos_open
+            ss["has_position"] = pos_open
+            if not pos_open:
+                continue
+            _update_position_age(ss)
+            _check_positions(symbol, mode)
+            if not _has_open_position(symbol, mode):
+                _open_positions[symbol] = False
+                ss["has_position"] = False
+                _clear_position_age(ss)
+                continue
+            pnl = _get_position_pnl(symbol, mode)
+            if pnl is not None and pnl < -6.0:
+                logger.critical(f"[自动驾驶] {symbol} 守卫极端浮亏保护: {pnl:.1f}%")
+                _close_position_immediate(symbol, mode)
+                _open_positions[symbol] = False
+                ss["has_position"] = False
+                _clear_position_age(ss)
+                _set_cooldown(ss, _PROTECTIVE_COOLDOWN_SECONDS)
+                _state["last_action"] = f"{symbol}: 守卫极端浮亏平仓 ({pnl:.1f}%)"
+                _state["last_action_time"] = int(time.time())
+        except Exception as exc:
+            logger.debug(f"[自动驾驶] {symbol} 轻量守卫跳过: {exc}")
 
 
 def _check_positions(symbol: str, mode: str):
