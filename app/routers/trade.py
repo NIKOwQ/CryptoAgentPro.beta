@@ -111,7 +111,27 @@ def close_one(order_id: int):
 
 @router.get("/account")
 def get_account():
-    return paper_account.account_summary()
+    if settings.TRADING_MODE == "paper":
+        return paper_account.account_summary()
+    try:
+        engine = ExecutionEngine()
+        ex = engine._exchange()
+        bal = ex.fetch_account_balance()
+        positions = ex.fetch_positions()
+        return {
+            "trading_mode": settings.TRADING_MODE,
+            "equity": bal.get("total", 0),
+            "wallet_balance": bal.get("wallet_balance", bal.get("total", 0)),
+            "available": bal.get("available", 0),
+            "unrealized_pnl": bal.get("unrealized_pnl", 0),
+            "initial_margin": bal.get("initial_margin", 0),
+            "open_positions": len(positions),
+            "realized_pnl": 0,
+            "closed_trades": 0,
+            "win_rate": 0,
+        }
+    except Exception:
+        return paper_account.account_summary()
 
 
 @router.get("/history")

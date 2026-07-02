@@ -243,12 +243,25 @@ class BinanceExchange(ExchangeBase):
 
     def fetch_account_balance(self) -> dict[str, Any]:
         if not self.with_keys:
-            return {"total": 0, "available": 0}
+            return {"total": 0, "available": 0, "wallet_balance": 0, "unrealized_pnl": 0}
+        account = self._request("GET", "/fapi/v2/account", signed=True)
+        if isinstance(account, dict) and "error" not in account:
+            return {
+                "total": float(account.get("totalMarginBalance", 0) or 0),
+                "available": float(account.get("availableBalance", 0) or 0),
+                "wallet_balance": float(account.get("totalWalletBalance", 0) or 0),
+                "unrealized_pnl": float(account.get("totalUnrealizedProfit", 0) or 0),
+                "initial_margin": float(account.get("totalInitialMargin", 0) or 0),
+                "maint_margin": float(account.get("totalMaintMargin", 0) or 0),
+            }
         data = self._request("GET", "/fapi/v2/balance", signed=True)
         if not isinstance(data, list):
-            return {"total": 0, "available": 0}
+            return {"total": 0, "available": 0, "wallet_balance": 0, "unrealized_pnl": 0}
         for b in data:
             if b.get("asset") == "USDT":
-                return {"total": float(b.get("balance", 0)),
-                        "available": float(b.get("availableBalance", 0))}
-        return {"total": 0, "available": 0}
+                total = float(b.get("balance", 0) or 0)
+                return {"total": total,
+                        "available": float(b.get("availableBalance", 0) or 0),
+                        "wallet_balance": total,
+                        "unrealized_pnl": 0}
+        return {"total": 0, "available": 0, "wallet_balance": 0, "unrealized_pnl": 0}

@@ -206,9 +206,9 @@ onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
         <div class="text-lg font-semibold">${{ account?.equity?.toFixed(2) ?? '--' }}</div>
       </div>
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
-        <div class="text-[10px] text-white/30">已实现盈亏</div>
-        <div class="text-lg font-semibold" :class="(account?.realized_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">
-          {{ (account?.realized_pnl ?? 0) >= 0 ? '+' : '' }}${{ account?.realized_pnl?.toFixed(2) ?? '--' }}
+        <div class="text-[10px] text-white/30">{{ account?.trading_mode === 'testnet' ? '未实现盈亏' : '已实现盈亏' }}</div>
+        <div class="text-lg font-semibold" :class="((account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl) ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'">
+          {{ ((account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl) ?? 0) >= 0 ? '+' : '' }}${{ (account?.trading_mode === 'testnet' ? account?.unrealized_pnl : account?.realized_pnl)?.toFixed(2) ?? '--' }}
         </div>
       </div>
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
@@ -216,8 +216,8 @@ onUnmounted(() => { clearInterval(pollTimer); clearInterval(uptimeTimer); });
         <div class="text-lg font-semibold">{{ account?.open_positions ?? 0 }}</div>
       </div>
       <div class="bg-white/[0.03] border border-white/10 rounded-xl p-3 text-center">
-        <div class="text-[10px] text-white/30">胜率</div>
-        <div class="text-lg font-semibold">{{ account?.win_rate ?? 0 }}%</div>
+        <div class="text-[10px] text-white/30">{{ account?.trading_mode === 'testnet' ? '可用余额' : '胜率' }}</div>
+        <div class="text-lg font-semibold">{{ account?.trading_mode === 'testnet' ? `$${account?.available?.toFixed(2) ?? '--'}` : `${account?.win_rate ?? 0}%` }}</div>
       </div>
     </div>
 

@@ -796,14 +796,18 @@ def account():
         from cryptoagents.exchange import factory
         ex = factory.get_exchange(with_keys=True)
         bal = ex.fetch_account_balance()
+        positions = ex.fetch_positions()
         from cryptoagents.execution import paper_account
         paper = paper_account.account_summary()
         return {
             "trading_mode": mode,
             "equity": bal.get("total", 0),
+            "wallet_balance": bal.get("wallet_balance", bal.get("total", 0)),
             "available": bal.get("available", 0),
+            "unrealized_pnl": bal.get("unrealized_pnl", 0),
+            "initial_margin": bal.get("initial_margin", 0),
             "realized_pnl": paper.get("realized_pnl", 0),
-            "open_positions": len(paper_account.list_open()),
+            "open_positions": len(positions),
             "closed_trades": paper.get("closed_trades", 0),
             "win_rate": paper.get("win_rate", 0),
         }
